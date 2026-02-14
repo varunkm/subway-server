@@ -1,0 +1,27 @@
+# =============================================================================
+# MTA Subway Server - Python Dependencies
+# =============================================================================
+# Install with: pip install -r requirements.txt
+# Recommended: Use a virtual environment (python3 -m venv venv)
+
+# Flask - Lightweight web framework for our HTTP API
+# Serves subway data to the ESP32 over the local network
+Flask==3.1.0
+
+# nyct-gtfs - MTA GTFS-Realtime parser
+# Fetches and parses real-time subway data from MTA's API
+# v2.0+ works WITHOUT an API key
+nyct-gtfs==2.1.0
+
+# Flask-Caching - In-memory caching for Flask
+# Caches subway data for 60 seconds to reduce MTA API load
+Flask-Caching==2.3.1
+
+# python-dotenv - Load environment variables from .env file
+# Keeps secrets (API keys) out of source code
+python-dotenv==1.1.0
+
+# pytz - Timezone handling
+# Converts MTA arrival times to America/New_York timezone
+# Required for accurate wall clock time display
+pytz==2025.1

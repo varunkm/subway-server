@@ -1,0 +1,30 @@
+# =============================================================================
+# MTA Subway Server - Git Ignore
+# =============================================================================
+
+# Environment variables (contains optional API key)
+.env
+
+# User configuration (contains personal stop/line choices)
+config/config.json
+
+# Python virtual environment
+venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Log files
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
