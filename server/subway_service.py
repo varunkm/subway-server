@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 import pytz
 from nyct_gtfs import NYCTFeed
 
-from server.utils import format_wall_clock
+from utils import format_wall_clock
 
 
 # Module-level logger — name will be "server.subway_service" in log output

@@ -29,9 +29,9 @@ import pytz
 from flask import Flask, Response, jsonify
 from flask_caching import Cache
 
-from server.config import Config
-from server.subway_service import SubwayService
-from server.utils import get_local_ip
+from config import Config
+from subway_service import SubwayService
+from utils import get_local_ip
 
 
 # =============================================================================
