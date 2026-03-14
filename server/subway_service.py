@@ -7,9 +7,10 @@ and converts it into simple wall clock times for the e-ink display.
 
 This is the core business logic of the server. It:
   1. Connects to MTA via the nyct-gtfs library
-  2. Filters trains by stop, line, and direction
-  3. Converts arrival datetimes to "H:MM" wall clock strings
-  4. Handles errors gracefully (returns empty data, never crashes)
+  2. Fetches multiple GTFS feeds when stations span different feed groups
+  3. Filters trains by stop, line, and direction
+  4. Converts arrival datetimes to "H:MM" wall clock strings
+  5. Handles errors gracefully (returns empty data, never crashes)
 
 Usage:
     from server.config import Config
@@ -18,7 +19,7 @@ Usage:
     config = Config()
     service = SubwayService(config)
     data = service.get_arrivals()
-    # data['lines'] → {'4': ['3:45', '3:52', '4:01'], ...}
+    # data['stations'] → [{'label': '86/Lex', 'lines': {'4': ['3:45', ...]}}, ...]
 """
 
 import logging
@@ -28,6 +29,7 @@ from datetime import datetime, timedelta
 import pytz
 from nyct_gtfs import NYCTFeed
 
+from config import LINE_TO_FEED
 from utils import format_wall_clock
 
 
@@ -44,9 +46,6 @@ class SubwayService:
 
     Call get_arrivals() to get the latest subway times. The method handles
     all errors internally and always returns a valid dict (possibly empty).
-
-    Attributes:
-        config: The Config object with stop_id, lines, direction, etc.
     """
 
     def __init__(self, config):
@@ -57,61 +56,71 @@ class SubwayService:
             config (Config): Validated configuration object.
         """
         self.config = config
+        self.feed_ids = config.get_feed_ids()
 
+        labels = [s["label"] for s in config.stations]
         logger.info(
-            f"SubwayService initialized: stop={config.stop_id}, "
-            f"lines={config.lines}, direction={config.direction}"
+            f"SubwayService initialized: stations={labels}, "
+            f"feeds={sorted(self.feed_ids)}"
         )
 
     def get_arrivals(self):
         """
         Fetch subway arrivals from MTA and return formatted wall clock times.
 
-        This is the main public method. It fetches live data from the MTA,
-        filters and formats it, and returns a structured dict.
-
         Returns:
             dict: Always returns a dict with this shape:
                 {
-                    'lines': {
-                        '<line>': ['<time1>', '<time2>', ...],
+                    'stations': [
+                        {
+                            'label': str,
+                            'lines': {'<line>': ['<time1>', ...], ...}
+                        },
                         ...
-                    },
+                    ],
                     'metadata': {
-                        'stop_id': str,
                         'last_update': datetime,
                         'fetch_duration_ms': int,
                         'train_count': int
                     }
                 }
 
-                On error, 'lines' will be empty and metadata will contain
-                an 'error' key describing what went wrong.
+                On error, 'stations' will have empty lines and metadata
+                will contain an 'error' key.
         """
         start_time = datetime.now()
 
         try:
-            logger.info(f"Fetching GTFS data for stop {self.config.stop_id}")
+            # -----------------------------------------------------------------
+            # Step 1: Fetch all required GTFS feeds (one per feed group)
+            # -----------------------------------------------------------------
+            feeds = {}
+            for feed_id in self.feed_ids:
+                # NYCTFeed accepts a line name; pick the first line in that feed
+                # to identify which feed to fetch.
+                representative_line = self._line_for_feed(feed_id)
+                logger.info(f"Fetching GTFS feed '{feed_id}' via line '{representative_line}'")
+                feeds[feed_id] = NYCTFeed(representative_line)
 
             # -----------------------------------------------------------------
-            # Step 1: Fetch the GTFS-Realtime feed from MTA
+            # Step 2: Process each station
             # -----------------------------------------------------------------
-            # We pass the first line as the feed specifier. nyct-gtfs knows
-            # which feed to fetch based on the line (e.g., "4" → feed "1",
-            # "A" → feed "ACE"). All our configured lines are in the same
-            # feed (validated at startup), so any line works here.
-            feed = NYCTFeed(self.config.lines[0])
+            stations_result = []
 
-            # -----------------------------------------------------------------
-            # Step 2: Process each configured line
-            # -----------------------------------------------------------------
-            arrivals_by_line = {}
+            for station in self.config.stations:
+                arrivals_by_line = {}
 
-            for line in self.config.lines:
-                times = self._get_times_for_line(feed, line)
-                # Only include lines that have at least one upcoming train
-                if times:
-                    arrivals_by_line[line] = times
+                for line in station["lines"]:
+                    feed_id = LINE_TO_FEED[line]
+                    feed = feeds[feed_id]
+                    times = self._get_times_for_line(feed, line, station)
+                    if times:
+                        arrivals_by_line[line] = times
+
+                stations_result.append({
+                    "label": station["label"],
+                    "lines": arrivals_by_line,
+                })
 
             # -----------------------------------------------------------------
             # Step 3: Build the response
@@ -119,17 +128,20 @@ class SubwayService:
             duration_ms = int(
                 (datetime.now() - start_time).total_seconds() * 1000
             )
-            train_count = sum(len(t) for t in arrivals_by_line.values())
+            train_count = sum(
+                len(t)
+                for s in stations_result
+                for t in s["lines"].values()
+            )
 
             logger.info(
                 f"Found {train_count} trains across "
-                f"{len(arrivals_by_line)} lines in {duration_ms}ms"
+                f"{len(stations_result)} stations in {duration_ms}ms"
             )
 
             return {
-                "lines": arrivals_by_line,
+                "stations": stations_result,
                 "metadata": {
-                    "stop_id": self.config.stop_id,
                     "last_update": datetime.now(NY_TZ),
                     "fetch_duration_ms": duration_ms,
                     "train_count": train_count,
@@ -137,8 +149,6 @@ class SubwayService:
             }
 
         except Exception as e:
-            # Catch ALL exceptions so the server never crashes from bad data
-            # or network issues. Log the full traceback for debugging.
             duration_ms = int(
                 (datetime.now() - start_time).total_seconds() * 1000
             )
@@ -146,9 +156,8 @@ class SubwayService:
             logger.error(traceback.format_exc())
 
             return {
-                "lines": {},
+                "stations": [],
                 "metadata": {
-                    "stop_id": self.config.stop_id,
                     "last_update": datetime.now(NY_TZ),
                     "fetch_duration_ms": duration_ms,
                     "train_count": 0,
@@ -156,46 +165,47 @@ class SubwayService:
                 },
             }
 
-    def _get_times_for_line(self, feed, line):
+    def _line_for_feed(self, feed_id):
+        """Get a representative line name for a feed ID to pass to NYCTFeed."""
+        for station in self.config.stations:
+            for line in station["lines"]:
+                if LINE_TO_FEED[line] == feed_id:
+                    return line
+        return None
+
+    def _get_times_for_line(self, feed, line, station):
         """
-        Extract wall clock arrival times for one train line at our stop.
+        Extract wall clock arrival times for one train line at a station.
 
         Args:
             feed (NYCTFeed): The fetched GTFS feed object.
-            line (str): The train line to filter for, e.g. "4" or "A".
+            line (str): The train line to filter for, e.g. "4" or "Q".
+            station (dict): Station config with stop_id, direction, etc.
 
         Returns:
             list[str]: Up to max_trains wall clock times, sorted
                        chronologically. Example: ['3:45', '3:52', '4:01'].
-                       Returns empty list if no trains found.
         """
         try:
-            # Use nyct-gtfs's built-in filtering:
-            #   line_id        → only trains on this line (e.g. "4")
-            #   headed_for_stop_id → only trains that will stop at our stop
-            #   travel_direction   → only trains going our direction
             trips = feed.filter_trips(
                 line_id=line,
-                headed_for_stop_id=self.config.stop_id,
-                travel_direction=self.config.direction,
+                headed_for_stop_id=station["stop_id"],
+                travel_direction=station["direction"],
             )
 
             logger.debug(
                 f"Line {line}: found {len(trips)} trips "
-                f"heading for {self.config.stop_id}"
+                f"heading for {station['stop_id']}"
             )
 
-            # For each trip, extract the arrival time at our stop
             times = []
             for trip in trips:
-                arrival_time = self._extract_arrival_time(trip)
+                arrival_time = self._extract_arrival_time(trip, station["stop_id"])
                 if arrival_time is not None:
                     times.append(arrival_time)
 
-            # Sort by arrival time (earliest first)
             times.sort()
 
-            # Convert datetimes to wall clock strings and limit to max_trains
             wall_clock_times = []
             for dt in times[: self.config.max_trains]:
                 wall_clock_times.append(format_wall_clock(dt))
@@ -203,57 +213,38 @@ class SubwayService:
             return wall_clock_times
 
         except Exception as e:
-            # If something goes wrong processing one line, log it and
-            # return empty — don't let one bad line break the whole response
             logger.warning(f"Error processing line {line}: {e}")
             return []
 
-    def _extract_arrival_time(self, trip):
+    def _extract_arrival_time(self, trip, stop_id):
         """
-        Get the arrival datetime for our stop from a single trip.
-
-        Walks through the trip's stop_time_updates to find the entry
-        matching our configured stop_id, then validates the arrival time.
+        Get the arrival datetime for a stop from a single trip.
 
         Args:
             trip: A nyct-gtfs Trip object.
+            stop_id: The GTFS stop ID to look for.
 
         Returns:
             datetime or None: The arrival time if valid, None if the train
-                should be skipped (departed, no data, etc.).
+                should be skipped.
         """
         try:
-            # Each trip has a list of stops it will make. Walk through them
-            # to find the one matching our stop_id.
             for stop_update in trip.stop_time_updates:
-                if stop_update.stop_id == self.config.stop_id:
+                if stop_update.stop_id == stop_id:
                     arrival = stop_update.arrival
 
-                    # Skip if no arrival time data
                     if arrival is None:
-                        logger.debug(
-                            f"Trip {trip.trip_id}: no arrival time "
-                            f"for stop {self.config.stop_id}"
-                        )
                         return None
 
-                    # nyct-gtfs returns naive datetimes that are
-                    # implicitly in New York time. We need to make them
-                    # timezone-aware so we can compare and format them.
                     if arrival.tzinfo is None:
                         arrival = NY_TZ.localize(arrival)
 
-                    # Skip if the train has already departed (arrival in past)
                     now = datetime.now(NY_TZ)
                     if arrival <= now:
                         return None
 
-                    # Valid future arrival — return it
                     return arrival
 
-            # Our stop wasn't found in this trip's stop list
-            # (shouldn't happen since we filtered by headed_for_stop_id,
-            #  but handle it gracefully just in case)
             return None
 
         except Exception as e:

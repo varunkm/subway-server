@@ -1,6 +1,17 @@
 {
-  "stop_id": "631N",
-  "lines": ["4", "5", "6"],
-  "direction": "N",
-  "max_trains": 3
+  "max_trains": 3,
+  "stations": [
+    {
+      "label": "86/2nd",
+      "stop_id": "Q05S",
+      "lines": ["Q"],
+      "direction": "S"
+    },
+    {
+      "label": "86/Lex",
+      "stop_id": "631S",
+      "lines": ["4", "5", "6"],
+      "direction": "S"
+    }
+  ]
 }

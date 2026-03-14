@@ -6,8 +6,9 @@ Small helper functions used across the server. Kept separate from
 business logic so they're easy to test and reuse.
 
 Functions:
-    format_wall_clock  — Convert a datetime to "H:MM" wall clock string
-    get_local_ip       — Get this machine's local network IP address
+    format_wall_clock    — Convert a datetime to "H:MM" wall clock string
+    format_compact_times — Compact a list of "H:MM" strings for display
+    get_local_ip         — Get this machine's local network IP address
 """
 
 import socket
@@ -24,10 +25,6 @@ def format_wall_clock(arrival_datetime):
     """
     Convert a datetime to a wall clock time string like "3:45".
 
-    This is the core formatting function for the entire project. We display
-    wall clock times (not "5 min") because the e-ink display refreshes
-    infrequently. Wall clock times stay accurate between refreshes.
-
     Args:
         arrival_datetime (datetime): A timezone-aware datetime representing
             when the train arrives. Can be in any timezone — it will be
@@ -43,43 +40,69 @@ def format_wall_clock(arrival_datetime):
     Raises:
         ValueError: If arrival_datetime has no timezone info.
     """
-    # Safety check: we need timezone info to convert correctly
     if arrival_datetime.tzinfo is None:
         raise ValueError(
             f"Cannot format naive datetime (no timezone): {arrival_datetime}"
         )
 
-    # Convert to New York time (handles EST/EDT automatically via pytz)
     local_time = arrival_datetime.astimezone(NY_TZ)
-
-    # Format as 12-hour time without AM/PM
-    # %-I gives the hour without a leading zero (Unix/macOS)
-    # %M gives minutes with a leading zero (always two digits)
-    # Example: 3:45 PM → "3:45", 12:05 AM → "12:05"
     return local_time.strftime("%-I:%M")
+
+
+def format_compact_times(times):
+    """
+    Compact a list of "H:MM" time strings for the e-ink display.
+
+    Groups consecutive times by hour. First time in each hour group is
+    shown as H:MM, subsequent times show only ,MM. Hour groups are
+    separated by semicolons.
+
+    Args:
+        times (list[str]): List of "H:MM" strings, e.g. ["5:34", "5:45", "6:01"].
+
+    Returns:
+        str: Compact string, e.g. "5:34,45;6:01".
+
+    Example:
+        >>> format_compact_times(["5:34", "5:45", "5:56", "6:01", "6:04"])
+        "5:34,45,56;6:01,04"
+    """
+    if not times:
+        return ""
+
+    groups = []
+    current_hour = None
+    current_parts = []
+
+    for time_str in times:
+        hour, minute = time_str.split(":")
+        if hour != current_hour:
+            if current_parts:
+                groups.append(current_parts)
+            current_hour = hour
+            current_parts = [f"{hour}:{minute}"]
+        else:
+            current_parts.append(minute)
+
+    if current_parts:
+        groups.append(current_parts)
+
+    return ";".join(",".join(parts) for parts in groups)
 
 
 def get_local_ip():
     """
     Get this machine's IP address on the local network.
 
-    This is useful for telling the user what IP to point the ESP32 at.
-    Uses a socket trick: connect to an external IP (doesn't actually send
-    data) to determine which local interface would be used.
-
     Returns:
         str: Local IP address like "192.168.1.50", or "127.0.0.1" if
              the local IP can't be determined.
     """
     try:
-        # Create a UDP socket (doesn't actually send anything)
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Connect to a public IP to figure out our local interface
-        # 8.8.8.8 is Google's DNS — we don't actually send any data
         s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]
         s.close()
         return local_ip
     except Exception:
-        # If anything goes wrong, fall back to localhost
         return "127.0.0.1"

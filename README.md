@@ -1,6 +1,8 @@
 # NYC Subway E-Ink Fridge Clock — Server
 
-A Flask server that fetches real-time NYC subway arrivals from the MTA and serves them as wall clock times over HTTP. Built to run on a Raspberry Pi as part of a larger project: a battery-powered e-ink display on a fridge that shows upcoming train times.
+A Flask server that fetches real-time NYC subway arrivals from the MTA and serves them as wall clock times over HTTP. Built to run on a Raspberry Pi.
+
+First part of a project to make a battery-powered e-ink display on my fridge that shows upcoming train times.
 
 Times are displayed as wall clock values (e.g. "3:45") rather than relative times ("5 min away") because the e-ink client only refreshes every 5 minutes — wall clock times stay accurate between refreshes.
 
